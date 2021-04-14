@@ -7,14 +7,11 @@ exitHandle = uicontrol('Style', 'PushButton', ...
                          'String', 'Stop loop', ...
                          'Callback', 'delete(gcbf)');
 
-
-
-
-
 %% Environmental Parameters
 g = 9.81; % gravity (m/s^2)
 
-% max time, time step, and # of iterations. Using for loop instead of while loo
+% max time, time step, and # of iterations. Using for loop instead of while
+% loop
 % makes preallocation easier
 t_max = 10;
 dt = .001;
@@ -32,16 +29,21 @@ rho_air = 1.225;
 mu = 1.81e-5;
 Q = 0.1; % m^3/s
 [Y1, Z1, u] = pipe_flow2(rho_air, mu, Q, z_range, dr, 'circular', D);
-U = repmat(u, [length(z_range), 1]);
-U0_max = max(U, [], 'all');
+
+Y1_reshaped = reshape(Y1, [1, numel(Y1)]);
+Z1_reshaped = reshape(Z1, [1, numel(Z1)]);
+
+U0 = repmat(u, [length(z_range), 1]);
 I = 0.05; % turbulence intensity
-u_prime_avg = I*U;
+u_prime_avg = I*U0;
 
 % How desireable each point in the flow is
-goodness = U.*(-Z1);
+goodness = U0.*(-Z1);
 surf(Y1,Z1,goodness);
+
+
 %% Robot Physical Parameters
-sensor_radius = 2;
+sensor_radius = 0.5;
 
 % mass of car/gondola and point mass (sampler) (kg)
 m_c = 50; 
@@ -123,18 +125,29 @@ F_l_hist = nan(length(dof_hist), 1);
 
 % error history
 error_hist = nan(iterations, 1);
+reward_hist = 0;
 
 
 %%
 explored = zeros(size(goodness));
-explored_hist = zeros(size(explored,1), size(explored,2), iterations);
-reward_hist = 0;
+% explored_hist = zeros(size(explored,1), size(explored,2), iterations);
+moving_avg_length = 10;
+goodness_in_range_hist = nan(size(goodness,1), size(goodness,2), moving_avg_length);
+
 
 max_goodness = max(reward_hist);
 
-y_desired = y;
-z_desired = z;
+y_desired = interp2(Y1, Z1, Y1, y, z, 'nearest');
+z_desired = interp2(Y1, Z1, Z1, y, z, 'nearest');
+
+y_indices = find(Y1 == y_desired);
+z_indices = find(Z1 == z_desired);
+desired_index = intersect(y_indices, z_indices);
+
+R_y_desired = y_desired;
+l_desired = -z_desired;
 theta_desired = 0;
+% desired_index = find(Y1(Z1 = z_desired && Y1 = y_desired))
 
 y_desired_hist = [];
 z_desired_hist = [];
@@ -143,9 +156,16 @@ error_eqn = 1;
 
 
 %% For recording pendulum/flow over time
-%     v = VideoWriter('Pendulum on Cart with Time Dependent Flow');%
+%     v = VideoWriter('Pendulum on Cart with Turbulent Flow');%
 %     v.FrameRate = 10;%
 %     open(v)%
+z_max = min(z_range);
+max_vel = max(u)+3*max(u_prime_avg, [], 'all'); % maximum velocity that the flow is likely to achieve
+
+figure(5);
+colormap(figure(5), 'jet')
+caxis([0 -z_max*max_vel]); % fix color bounds for plotting flow according. Max value is 3 std dev away from maximum flow velocity at deepest point in flow
+
          
      
 %% Now do the thing
@@ -156,7 +176,7 @@ while i < iterations %&& error_eqn > .2
         break;
     end
     %% Define the mapped area
-    U = U + randn(size(U)).*u_prime_avg;
+    U = U0 + randn(size(U0)).*u_prime_avg;
 %     U_hist(:,:,i) = U;
     goodness = U.*(-Z1);
 %     goodness_hist(:,:,i) = goodness;
@@ -165,13 +185,22 @@ while i < iterations %&& error_eqn > .2
     explored = or(is_in_range, explored);
 %     explored_hist(:,:,i) = explored; % update history of mapped region
     
-    good_in_range = goodness.*is_in_range; % Value of region in view
-    desired_index = find(good_in_range == max(good_in_range, [], 'all'));
-    if length(desired_index)>1
-        desired_index = desired_index(end);       
+    goodness_in_range = goodness.*is_in_range; % Value of region in view
+    for j = size(goodness_in_range_hist, 3)-1:-1:1
+        goodness_in_range_hist(:,:,j+1) = goodness_in_range_hist(:,:,j);
     end
-    if  goodness(desired_index) > max_goodness
-        max_goodness = goodness(desired_index);
+    goodness_in_range_hist(:,:,1) = goodness_in_range;
+    goodness_in_range_mean = mean(goodness_in_range_hist, 3);
+    best_index = find(goodness_in_range_mean == max(goodness_in_range_mean, [], 'all'));
+    if length(best_index)>1
+        best_index = best_index(end);       
+    elseif isempty(best_index)
+        best_index = desired_index;
+    end
+    
+    if  best_index~=desired_index && goodness_in_range_mean(best_index)>goodness_in_range_mean(desired_index)
+        desired_index = best_index;
+        max_goodness = goodness_in_range_mean(desired_index);
         y_desired = Y1(desired_index);
         z_desired = Z1(desired_index);
 %         disp('new target: ')
@@ -179,7 +208,7 @@ while i < iterations %&& error_eqn > .2
         z_desired_hist = [z_desired_hist; z_desired];
         R_y_desired = y_desired;
         l_desired = -z_desired;
-        reward_hist = [reward_hist;goodness(desired_index)];
+        reward_hist = [reward_hist;max_goodness];
     end    
     
     %% End effector desired accelerations
@@ -261,11 +290,9 @@ while i < iterations %&& error_eqn > .2
 
 %% plot robot configuration
     plot_bot = true;
+ 
     if plot_bot && mod(i-1, 50)==0
-        Y1_reshaped = reshape(Y1, [1, numel(Y1)]);
-        Z1_reshaped = reshape(Z1, [1, numel(Z1)]);
             figure(4);
-
             ax1 = axes;
             imagesc(y_range, z_range, U);
             colormap(ax1,'gray');
@@ -277,7 +304,7 @@ while i < iterations %&& error_eqn > .2
             % imagesc(y_range, z_range,goodness_reshaped,'alphadata',goodness_reshaped>0);
             scatter(Y1_reshaped, Z1_reshaped, [], goodness_reshaped, 'fill')
             colormap(ax2,'jet');
-            caxis(ax2,[min(goodness_reshaped) max(goodness_reshaped)]);
+            caxis(ax2,[0 -z_max*max_vel]); % fix color bounds for plotting flow according. Max value is 3 std dev away from maximum flow velocity at deepest point in flow
             ax2.Visible = 'off';
             linkprop([ax1 ax2],'Position');
             %     h = scatter(Y1_reshaped, Z1_reshaped, [], goodness_reshaped, 'fill');
@@ -288,8 +315,13 @@ while i < iterations %&& error_eqn > .2
 %                 frame = getframe(gcf);
             drawnow
 %                 writeVideo(v, frame); 
-    end
 
+    end
+    plot_goodness = true;
+    if plot_goodness && mod(i,50)==0
+              figure(5);
+            scatter(Y1_reshaped, Z1_reshaped, [], reshape(goodness, [1, numel(goodness)]), 'fill')
+    end
     i = i+1; % iterate to next time step
 end
 
