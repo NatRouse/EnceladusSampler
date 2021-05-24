@@ -41,7 +41,6 @@ D.cd = (-D.cs.ax(1))*D.c;
 % D.h = ones(1,D.bfs)*D.bfs^1.5 ./ (D.c'./D.cs.ax)';
 %From Schaal
 D.h = (diff(D.c*0.5)).^2;
-% D.h = 1./[D.h,D.h(end)];
 D.h = 1./[D.h,D.h(end)];
 % %From SMP paper
 % D.h = linspace(log10(.3),log10(.002), bfs);
@@ -55,107 +54,115 @@ D.h = 1./[D.h,D.h(end)];
 
 %% Schaal "learn_dcp_batch" process
 %Variables for plotting
-Z = zeros(2,2,floor(2*tau/D.dt+1));
+Z = zeros(2,floor(2*tau/D.dt+1),2);
 X = Z;
 V=Z;
-T = zeros(3,2,floor(2*tau/D.dt+1));
+T = zeros(3,floor(2*tau/D.dt+1),2);
 Y=T;
-PSI = zeros(D.bfs,(2*tau/D.dt+1));
-W = zeros(D.bfs,D.n_dmps,(2*tau/D.dt+1));
+PSI = zeros(D.bfs,(2*tau/D.dt+1),D.n_dmps);
+W = zeros(D.bfs,(2*tau/D.dt+1),D.n_dmps);
 
 %generate the minimum jerk trajectory
 t = 0;
 td = 0;
 tdd = 0;
 for i = 0:2*tau/dt
-    [t,td,tdd] = min_jerk_step(t,td,tdd,desired_traj(end,:),tau-i*dt,dt);
-    T(:,:,i+1) = [t; td; tdd];
+    [t,td,tdd] = min_jerk_step(t,td,tdd,desired_traj(i+2,:),tau-i*dt,dt);
+    T(:,i+1,:) = [t; td; tdd];
 end
 
 %use batch_fit to initialize with minjerk
-[~,~,~] = dmp_batch_fit(D,tau,T(1,:,:),T(2,:,:),T(3,:,:));
+[D,~,~,~] = dmp_batch_fit(D,tau,T(1,:,:),T(2,:,:),T(3,:,:));
 
 %test the fit
-D = dmp_reset(D);
+% D = dmp_reset(D);
 D = dmp_set_goal(D,desired_traj(end,:),1);
 
 for i = 0:2*tau/dt
-    [D,y,yd,ydd,~] = dmp_run(D,tau);
+    [D,y,yd,ydd,weight] = dmp_run(D,tau);
     
-    Z(:,:,i+1) = [D.z; D.zd];
-    Y(:,:,i+1) = [y; yd; ydd];
-    size(D.x)
-    size(D.xd)
-    X(:,:,i+1) = [D.x; D.xd];
-    V(:,:,i+1) = [D.v; D.vd];
-    PSI(:,i+1) = D.psi';
-    W(:,:,i+1) = D.w';
+    Z(:,i+1,:) = [D.z; D.zd];
+    Y(:,i+1,:) = [y; yd; ydd];
+    X(:,i+1,:) = [D.x; D.xd];
+    V(:,i+1,:) = [D.v; D.vd];
+    PSI(:,i+1,:) = D.psi';
+%     W(:,i+1,:) = D.w';
+    W(:,i+1,:) = weight;
 end
 
-% figure(5)
-%  clf(5)
-%  figure(5)
-% plot(y(:,1),y(:,2))
-
 %PLOTTING
-time = (0:dt:tau*2);
+time = (0:dt:tau*2)';
 
 figure(5)
 clf(5)
 figure(5)
 
+for i = 1:D.n_dmps
+    hold on
+    
 %position, velocity, acceleration vs. target
 subplot(4,3,1)
-plot(time,[Y(:,1) T(:,1)]);
+plot(time,[Y(1,:,i)' T(1,:,i)']);
 title('y')
 
 subplot(4,3,2)
-plot(time,[Y(:,2) T(:,2)]);
+plot(time,[Y(2,:,i)' T(2,:,i)']);
 title('yd')
 
 subplot(4,3,3)
-plot(time,[Y(:,3) T(:,3)]);
+plot(time,[Y(3,:,i)' T(3,:,i)']);
 title('ydd')
 
 %internal states
 subplot(4,3,4)
-plot(time,Z(:,1))
+plot(time,Z(1,:,i))
 title('z')
 
 subplot(4,3,5)
-plot(time,Z(:,2))
+plot(time,Z(2,:,i))
 title('zd')
 
 subplot(4,3,6)
-plot(time,PSI)
-title('Weighting Kernelse')
+plot(time,PSI(:,:,i))
+title('{Psi activations/},{Basis functions}')
 
 subplot(4,3,7)
-plot(time,V(:,1))
+plot(time,V(1,:,i))
 title('v')
 
 subplot(4,3,8)
-plot(time,V(:,2))
+plot(time,V(2,:,i))
 title('vd')
 
 subplot(4,3,9)
-plot(time,W)
+plot(time,W(:,:,i))
 title('Linear Model Weights over Time')
 
 subplot(4,3,10)
-plot(time,X(:,1))
+plot(time,X(1,:,i))
 title('x')
 
 subplot(4,3,11)
-plot(time,X(:,2))
+plot(time,X(2,:,i))
 title('xd')
 
 subplot(4,3,12)
-plot(W(end,:))
+plot(W(end,:,i))
 title('Weights')
 xlabel(sprintf('tau=%f',tau))
 
 drawnow
+end
+
+figure(6)
+ clf(6)
+ figure(6)
+hold on
+plot(desired_traj(:,1),desired_traj(:,2))
+plot(Y(1,:,1),Y(1,:,2))
+
+title('Desired vs. Produced Trajectory')
+legend('Desired','Produced')
 
 toc
     
@@ -211,7 +218,7 @@ dmp.cs.ax = dmp.ay/3;
 dmp.cs.runtime = 1;
 dmp.cs.dt = dt;
 dmp.cs.timesteps = dmp.cs.runtime / dmp.cs.dt;
-dmp.cs.x = 1;
+% dmp.cs.x = 1;
 
 dmp = dmp_reset(dmp);
 end
@@ -239,26 +246,26 @@ function dmp = dmp_reset(dmp)
 dmp.y = dmp.y0;
 dmp.yd = zeros(1,dmp.n_dmps);
 dmp.ydd = zeros(1,dmp.n_dmps);
-dmp.cs.x = 1;
+dmp.x = ones(1,dmp.n_dmps);
 end
 
 %% DMP run
 function [dmp,y,yd,ydd,weights] = dmp_run(dmp,tau)
 %weighted sum of locally weighted regression models
-dmp.psi = exp(-0.5*((dmp.cs.x'-dmp.c).^2).*dmp.h);
+dmp.psi = exp(-0.5*((dmp.x'-dmp.c).^2).*dmp.h);
 amp = dmp.s;
 in = dmp.x;
 f = sum(in*dmp.w.*dmp.psi)/sum(dmp.psi+1e-10)*amp;
 
 dmp.vd = zeros(1,dmp.n_dmps);
-dmp.xd = dmp.cs.ax*(0-dmp.cs.x)*tau;
+dmp.xd = dmp.cs.ax*(0-dmp.x)*tau;
 dmp.zd = (dmp.ay.*(dmp.by.*(dmp.g-dmp.y)-dmp.z)+f)*tau;
 dmp.yd = dmp.z*tau;
 dmp.ydd = dmp.zd*tau;
 
 dmp.gd = dmp.ag.*(dmp.G-dmp.g);
 
-dmp.cs.x = dmp.xd*dmp.dt + dmp.cs.x;
+dmp.x = dmp.xd*dmp.dt + dmp.x;
 dmp.v = dmp.vd*dmp.dt + dmp.v;
 
 dmp.z = dmp.zd*dmp.dt + dmp.z;
@@ -269,7 +276,7 @@ dmp.g = dmp.gd*dmp.dt + dmp.g;
 y = dmp.y;
 yd = dmp.yd;
 ydd = dmp.ydd;
-weights = dmp.psi'*in/sum(dmp.psi+1e-10)*amp;
+weights = in*dmp.psi/sum(dmp.psi+1e-10)*amp;
 end
 
 %% DMP rollout
@@ -527,7 +534,7 @@ end
 end
 
 %% DMP Batch Fit
-function [Y,Yd,Ydd] = dmp_batch_fit(dmp,tau,traj,trajd,trajdd)
+function [dmp,Y,Yd,Ydd] = dmp_batch_fit(dmp,tau,traj,trajd,trajdd)
 traj = squeeze(traj);
 trajd = squeeze(trajd);
 trajdd = squeeze(trajdd);
@@ -537,17 +544,17 @@ trajdd = gradient(trajd,dmp.cs.dt);
 end
 
 %start state & goal state
-y0 = traj(:,1)';
-goal = traj(:,end)';
+y0 = traj(1,:);
+goal = traj(end,:);
 g = goal;
 
 %amplitude is the max(traj)-min(traj)
 A = max(traj) - min(traj);
 
 %hidden states
-X = zeros(size(traj'));
-V = zeros(size(traj'));
-G = zeros(size(traj'));
+X = zeros(size(traj));
+V = zeros(size(traj));
+G = zeros(size(traj));
 x = ones(1,dmp.n_dmps);
 v = zeros(1,dmp.n_dmps);
 
@@ -570,7 +577,7 @@ dmp.A = max(traj)-min(traj);
 dmp.s = 1; %for fitting a new primitive, the scale is always one
 
 amp = dmp.s;
-Ft = (trajdd'/tau^2 - dmp.ay.*(dmp.by.*(G-traj')-trajd'/tau)) /amp;
+Ft = (trajdd/tau^2 - dmp.ay.*(dmp.by.*(G-traj)-trajd/tau)) /amp;
 
 %weights for each local model
 PSI = exp(-0.5*((X*ones(dmp.n_dmps,length(dmp.c))-ones(length(traj),1)*dmp.c).^2)...
@@ -587,9 +594,9 @@ F = sum((X*dmp.w).*PSI,2)./sum(PSI,2) * amp;
 z = zeros(1,dmp.n_dmps);
 zd = zeros(1,dmp.n_dmps);
 y = y0;
-Y = zeros(size(traj'));
-Yd = zeros(size(traj'));
-Ydd = zeros(size(traj'));
+Y = zeros(size(traj));
+Yd = zeros(size(traj));
+Ydd = zeros(size(traj));
 
 for i = 1:length(traj)
     Ydd(i,:) = zd*tau;
